@@ -1,13 +1,10 @@
-import { createClient } from "@supabase/supabase-js";
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App.jsx";
+import "./index.css";
 
-const url = import.meta.env.VITE_SUPABASE_URL;
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-if (!url || !anonKey) {
-  console.warn(
-    "VITE_SUPABASE_URL atau VITE_SUPABASE_ANON_KEY belum diatur. " +
-      "Cek file .env (lokal) atau Environment Variables di Vercel."
-  );
-}
-
-export const supabase = createClient(url, anonKey);
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
