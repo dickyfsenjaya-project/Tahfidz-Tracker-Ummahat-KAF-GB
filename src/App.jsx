@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import {
   BookOpen, BarChart3, Settings, Check, Plus, Trash2,
-  Users2, Sparkles, Download, Video, UsersRound, Search, Moon, RefreshCw
+  Sparkles, Download, Video, UsersRound, Search, RefreshCw, X
 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -41,25 +41,31 @@ const SURAH = [
 
 const HARI = ["Ahad","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu"];
 
-const APRESIASI = [
+const APRESIASI_HADIR = [
   "Masya Allah, tabarakallah! Semoga tiap huruf yang kamu ulang jadi cahaya di hatimu.",
   "Barakallahu fiik! Konsistensi kecil ini yang membuat hafalan melekat kuat.",
   "Semoga Allah mudahkan setiap ayat yang kamu jaga hari ini.",
-  "Luar biasa! Rasulullah bersabda, sebaik-baik kalian adalah yang belajar & mengajarkan Al-Qur'an.",
+  "Luar biasa! Sebaik-baik kalian adalah yang belajar & mengajarkan Al-Qur'an.",
   "Setiap huruf yang dibaca bernilai satu kebaikan dan dilipatgandakan sepuluh. Teruskan!",
   "Alhamdulillah, satu setoran lagi tersimpan. Istiqomah itu yang paling dicintai Allah.",
   "Masya Allah tabarakallah, hatimu sedang disirami cahaya Al-Qur'an hari ini.",
 ];
 
-const BADGES = [
-  { min: 4, label: "Konsisten", emoji: "🌱" },
-  { min: 12, label: "Istiqomah", emoji: "🌙" },
-  { min: 26, label: "Mujahid Qur'an", emoji: "⭐" },
-  { min: 52, label: "Hafizh Sejati", emoji: "👑" },
+const APRESIASI_TIDAK_HADIR = [
+  "Semoga Allah memudahkan segala urusan ukhti.",
+  "Tidak apa-apa, semoga Allah mudahkan urusanmu dan menggantinya dengan pahala kesabaran.",
+  "Semoga kondisinya lekas membaik, dan pekan depan bisa kembali menyimak Al-Qur'an ya.",
+  "Semoga Allah memberi kemudahan dan kelapangan untuk urusan yang sedang dihadapi.",
 ];
 
-const KELOMPOK = Array.from({ length: 10 }, (_, i) => i + 1);
-const bigGroupOf = (k) => (k <= 5 ? 1 : 2);
+const BADGES = [
+  { min: 4, label: "Konsisten", emoji: "\uD83C\uDF31" },
+  { min: 12, label: "Istiqomah", emoji: "\uD83C\uDF19" },
+  { min: 26, label: "Mujahid Qur'an", emoji: "\u2B50" },
+  { min: 52, label: "Hafizh Sejati", emoji: "\uD83D\uDC51" },
+];
+
+const ADMIN_PIN = import.meta.env.VITE_ADMIN_PIN || "1234";
 
 /* ---------------------------------------------------------------------- */
 /* Util tanggal & jadwal                                                   */
@@ -80,53 +86,72 @@ function isoWeekKey(dateStr, refDateStr) {
   const start = new Date(toDate(refDateStr)); start.setDate(start.getDate() + wi * 7);
   return start.toISOString().slice(0, 10);
 }
-function getActivityMode(kelompok, tanggal, config) {
+function getActivityMode(besar, tanggal, config) {
   const wi = weekIndexOf(tanggal, config.refDate);
   const parity = ((wi % 2) + 2) % 2 === 0;
-  let mandiriBig = parity ? 1 : 2;
-  if (config.invert) mandiriBig = mandiriBig === 1 ? 2 : 1;
-  return bigGroupOf(kelompok) === mandiriBig ? "mandiri" : "jamai";
+  let mandiriBesar = parity ? "A" : "B";
+  if (config.invert) mandiriBesar = mandiriBesar === "A" ? "B" : "A";
+  return besar === mandiriBesar ? "mandiri" : "jamai";
 }
 
 /* ---------------------------------------------------------------------- */
-/* Lapisan data: Supabase (ganti window.storage versi artifact)            */
+/* Lapisan data: Supabase                                                   */
 /* ---------------------------------------------------------------------- */
 
 const DEFAULT_CONFIG = { refDate: "2026-06-29", invert: false };
-const DEFAULT_ROSTER = Object.fromEntries(KELOMPOK.map((k) => [k, []]));
+
+async function fetchGroups() {
+  const { data, error } = await supabase.from("groups").select("*").order("besar").order("urutan");
+  if (error) { console.error(error); return []; }
+  return data.map((g) => ({ id: g.id, nama: g.nama, besar: g.besar, urutan: g.urutan, names: g.names || [] }));
+}
+async function insertGroupRow(nama, besar, urutan) {
+  const { data, error } = await supabase.from("groups").insert([{ nama, besar, urutan, names: [] }]).select();
+  if (error) { console.error(error); return null; }
+  const g = data[0];
+  return { id: g.id, nama: g.nama, besar: g.besar, urutan: g.urutan, names: g.names || [] };
+}
+async function updateGroupRow(id, patch) {
+  const { error } = await supabase.from("groups").update(patch).eq("id", id);
+  if (error) console.error(error);
+}
+async function deleteGroupRow(id) {
+  const { error } = await supabase.from("groups").delete().eq("id", id);
+  if (error) console.error(error);
+}
 
 async function fetchEntries() {
   const { data, error } = await supabase.from("entries").select("*").order("tanggal", { ascending: false });
   if (error) { console.error(error); return []; }
   return data.map((r) => ({
-    id: r.id, nama: r.nama, kelompok: r.kelompok, tanggal: r.tanggal, hari: r.hari,
-    mode: r.mode, aktivitas: r.aktivitas || [], hadir: r.hadir, metode: r.metode,
+    id: r.id, nama: r.nama, kelompokId: r.kelompok_id, kelompokNama: r.kelompok_nama, kelompokBesar: r.kelompok_besar,
+    tanggal: r.tanggal, hari: r.hari, mode: r.mode, aktivitas: r.aktivitas || [], hadir: r.hadir, metode: r.metode,
     setoran: r.setoran || [], keterangan: r.keterangan || "", createdAt: r.created_at,
   }));
 }
 async function insertEntry(entry) {
   const { data, error } = await supabase.from("entries").insert([{
-    nama: entry.nama, kelompok: entry.kelompok, tanggal: entry.tanggal, hari: entry.hari,
-    mode: entry.mode, aktivitas: entry.aktivitas, hadir: entry.hadir, metode: entry.metode,
-    setoran: entry.setoran, keterangan: entry.keterangan,
+    nama: entry.nama, kelompok_id: entry.kelompokId, kelompok_nama: entry.kelompokNama, kelompok_besar: entry.kelompokBesar,
+    tanggal: entry.tanggal, hari: entry.hari, mode: entry.mode, aktivitas: entry.aktivitas, hadir: entry.hadir,
+    metode: entry.metode, setoran: entry.setoran, keterangan: entry.keterangan,
   }]).select();
   if (error) { console.error(error); return null; }
   const r = data[0];
-  return { id: r.id, nama: r.nama, kelompok: r.kelompok, tanggal: r.tanggal, hari: r.hari,
-    mode: r.mode, aktivitas: r.aktivitas || [], hadir: r.hadir, metode: r.metode,
+  return { id: r.id, nama: r.nama, kelompokId: r.kelompok_id, kelompokNama: r.kelompok_nama, kelompokBesar: r.kelompok_besar,
+    tanggal: r.tanggal, hari: r.hari, mode: r.mode, aktivitas: r.aktivitas || [], hadir: r.hadir, metode: r.metode,
     setoran: r.setoran || [], keterangan: r.keterangan || "", createdAt: r.created_at };
 }
-async function fetchRoster() {
-  const { data, error } = await supabase.from("roster").select("*");
-  if (error) { console.error(error); return DEFAULT_ROSTER; }
-  const obj = { ...DEFAULT_ROSTER };
-  data.forEach((r) => { obj[r.kelompok] = r.names || []; });
-  return obj;
-}
-async function updateRosterRow(kelompok, names) {
-  const { error } = await supabase.from("roster").update({ names }).eq("kelompok", kelompok);
+async function deleteEntryRow(id) {
+  const { error } = await supabase.from("entries").delete().eq("id", id);
   if (error) console.error(error);
+  return !error;
 }
+async function deleteEntryRows(ids) {
+  const { error } = await supabase.from("entries").delete().in("id", ids);
+  if (error) console.error(error);
+  return !error;
+}
+
 async function fetchConfig() {
   const { data, error } = await supabase.from("config").select("*").eq("id", 1).single();
   if (error) { console.error(error); return DEFAULT_CONFIG; }
@@ -150,7 +175,7 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 
 function ArchCard({ children, className = "" }) {
   return (
-    <div className={`bg-white border border-[#DCD3B8] shadow-sm ${className}`} style={{ borderRadius: "999px 999px 20px 20px" }}>
+    <div className={"bg-white border border-[#DCD3B8] shadow-sm " + className} style={{ borderRadius: "999px 999px 20px 20px" }}>
       {children}
     </div>
   );
@@ -177,6 +202,18 @@ function Field({ label, children, hint }) {
 }
 const inputCls = "w-full rounded-xl border border-[#DCD3B8] bg-[#FBFAF6] px-3.5 py-2.5 text-[#1B3A36] focus:outline-none focus:ring-2 focus:ring-[#12534A]/40 focus:border-[#12534A]";
 
+/* Logo sederhana: bulan sabit + buku terbuka, tanpa perlu file gambar */
+function AppLogo({ size = 40 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-label="Logo Setoran Tahfidz">
+      <circle cx="24" cy="24" r="24" fill="#B8902E" />
+      <path d="M18 30c2-8-1-14-6-16 7-2 13 2 15 8-1 3-3 6-9 8z" fill="#FBFAF6" opacity="0.95" />
+      <path d="M15 33c3-1 6-3 8-6" stroke="#1B3A36" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+      <path d="M16 15c3.5-3.5 9-4 12.5-1" stroke="#FBFAF6" strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.9" />
+    </svg>
+  );
+}
+
 function ConfettiPiece({ i }) {
   const colors = ["#12534A", "#B8902E", "#A8434B", "#6B9B8F"];
   const left = (i * 37) % 100;
@@ -184,32 +221,36 @@ function ConfettiPiece({ i }) {
   const dur = 2.2 + (i % 5) * 0.3;
   return (
     <span style={{
-      position: "absolute", top: -20, left: `${left}%`, width: 8, height: 8,
+      position: "absolute", top: -20, left: left + "%", width: 8, height: 8,
       background: colors[i % colors.length], borderRadius: i % 2 ? "50%" : "2px",
-      animation: `fall ${dur}s ${delay}s ease-in forwards`,
+      animation: "fall " + dur + "s " + delay + "s ease-in forwards",
     }} />
   );
 }
-function AppreciationModal({ streak, badge, onClose }) {
-  const msg = useMemo(() => APRESIASI[Math.floor(Math.random() * APRESIASI.length)], []);
+function AppreciationModal({ hadir, streak, badge, onClose }) {
+  const pool = hadir ? APRESIASI_HADIR : APRESIASI_TIDAK_HADIR;
+  const msg = useMemo(() => pool[Math.floor(Math.random() * pool.length)], [pool]);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0B1F1C]/60 p-4">
-      <style>{`@keyframes fall{to{transform:translateY(70vh) rotate(300deg);opacity:0}}
-        @keyframes popIn{0%{transform:scale(.85);opacity:0}100%{transform:scale(1);opacity:1}}`}</style>
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        {Array.from({ length: 26 }).map((_, i) => <ConfettiPiece key={i} i={i} />)}
-      </div>
+      <style>{"@keyframes fall{to{transform:translateY(70vh) rotate(300deg);opacity:0}} @keyframes popIn{0%{transform:scale(.85);opacity:0}100%{transform:scale(1);opacity:1}}"}</style>
+      {hadir && (
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          {Array.from({ length: 26 }).map((_, i) => <ConfettiPiece key={i} i={i} />)}
+        </div>
+      )}
       <div className="relative bg-[#FBFAF6] max-w-sm w-full p-7 text-center border border-[#DCD3B8] shadow-xl"
         style={{ borderRadius: "999px 999px 24px 24px", animation: "popIn .35s ease-out" }}>
-        <div className="w-16 h-16 mx-auto rounded-full bg-[#12534A] flex items-center justify-center mb-4">
+        <div className={"w-16 h-16 mx-auto rounded-full flex items-center justify-center mb-4 " + (hadir ? "bg-[#12534A]" : "bg-[#6B9B8F]")}>
           <Check size={30} className="text-white" strokeWidth={3} />
         </div>
-        <h3 className="text-xl text-[#1B3A36] mb-2" style={{ fontFamily: "'Amiri', serif" }}>Laporan tersimpan</h3>
+        <h3 className="text-xl text-[#1B3A36] mb-2" style={{ fontFamily: "'Amiri', serif" }}>
+          {hadir ? "Laporan tersimpan" : "Laporan tercatat"}
+        </h3>
         <p className="text-sm text-[#3E524D] leading-relaxed mb-4">{msg}</p>
-        {streak > 1 && (
+        {hadir && streak > 1 && (
           <div className="rounded-2xl bg-[#12534A]/8 px-4 py-3 mb-4">
-            <p className="text-sm text-[#12534A] font-semibold">🔥 {streak} pekan berturut-turut hadir</p>
-            {badge && <p className="text-xs text-[#B8902E] mt-1">{badge.emoji} Lencana "{badge.label}" terbuka!</p>}
+            <p className="text-sm text-[#12534A] font-semibold">{"\uD83D\uDD25 " + streak + " pekan berturut-turut hadir"}</p>
+            {badge && <p className="text-xs text-[#B8902E] mt-1">{badge.emoji + " Lencana \"" + badge.label + "\" terbuka!"}</p>}
           </div>
         )}
         <button onClick={onClose} className="mt-1 w-full rounded-full bg-[#1B3A36] text-white py-2.5 font-medium hover:bg-[#12534A] transition-colors">
@@ -236,7 +277,7 @@ function SetoranRow({ row, onChange, onRemove, jenisOptions }) {
       <input type="number" min="1" placeholder="Ayat dari" value={row.ayatDari}
         onChange={(e) => onChange({ ...row, ayatDari: e.target.value })}
         className="w-24 rounded-lg border border-[#DCD3B8] px-2 py-1.5 text-sm bg-white" />
-      <span className="text-[#6B7D77] text-sm">–</span>
+      <span className="text-[#6B7D77] text-sm">-</span>
       <input type="number" min="1" placeholder="Ayat s/d" value={row.ayatSampai}
         onChange={(e) => onChange({ ...row, ayatSampai: e.target.value })}
         className="w-24 rounded-lg border border-[#DCD3B8] px-2 py-1.5 text-sm bg-white" />
@@ -251,9 +292,9 @@ function SetoranRow({ row, onChange, onRemove, jenisOptions }) {
 /* Tab: Lapor Kehadiran                                                    */
 /* ---------------------------------------------------------------------- */
 
-function LaporTab({ config, roster, entries, onSubmitted }) {
+function LaporTab({ config, groups, entries, onSubmitted }) {
   const [nama, setNama] = useState("");
-  const [kelompok, setKelompok] = useState(1);
+  const [kelompokId, setKelompokId] = useState("");
   const [tanggal, setTanggal] = useState(new Date().toISOString().slice(0, 10));
   const [hadir, setHadir] = useState(null);
   const [aktivitasPilih, setAktivitasPilih] = useState([]);
@@ -267,10 +308,13 @@ function LaporTab({ config, roster, entries, onSubmitted }) {
 
   useEffect(() => {
     const p = loadProfile();
-    if (p) { setNama(p.nama || ""); setKelompok(p.kelompok || 1); }
-  }, []);
+    if (p && groups.some((g) => g.id === p.kelompokId)) setKelompokId(p.kelompokId);
+    else if (groups.length) setKelompokId(groups[0].id);
+    if (p) setNama(p.nama || "");
+  }, [groups]);
 
-  const mode = getActivityMode(kelompok, tanggal, config);
+  const selectedGroup = groups.find((g) => g.id === kelompokId) || null;
+  const mode = selectedGroup ? getActivityMode(selectedGroup.besar, tanggal, config) : "mandiri";
   const jenisOptions = mode === "mandiri"
     ? [{ value: "ziyadah", label: "Ziyadah" }, { value: "murajaah", label: "Murajaah" }]
     : [{ value: "murajaah_jamai", label: "Murajaah Jama'i" }];
@@ -278,9 +322,9 @@ function LaporTab({ config, roster, entries, onSubmitted }) {
   useEffect(() => {
     setAktivitasPilih(mode === "jamai" ? ["murajaah_jamai"] : []);
     setRows([]);
-  }, [mode, kelompok, tanggal]);
+  }, [mode, kelompokId, tanggal]);
 
-  const namaOpsi = roster[kelompok] || [];
+  const namaOpsi = selectedGroup ? selectedGroup.names : [];
 
   function toggleAktivitas(v) {
     setAktivitasPilih((prev) => prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v]);
@@ -304,7 +348,7 @@ function LaporTab({ config, roster, entries, onSubmitted }) {
     return streak;
   }
 
-  const canSubmit = nama.trim() && tanggal && hadir !== null &&
+  const canSubmit = nama.trim() && selectedGroup && tanggal && hadir !== null &&
     (hadir === false || (aktivitasPilih.length > 0 && metode && rows.length > 0 &&
       rows.every((r) => r.ayatDari && r.ayatSampai)));
 
@@ -312,8 +356,8 @@ function LaporTab({ config, roster, entries, onSubmitted }) {
     if (!canSubmit || saving) return;
     setSaving(true);
     const draft = {
-      nama: nama.trim(), kelompok, tanggal, hari: dayName(tanggal),
-      mode, aktivitas: hadir ? aktivitasPilih : [], hadir, metode: hadir ? metode : null,
+      nama: nama.trim(), kelompokId: selectedGroup.id, kelompokNama: selectedGroup.nama, kelompokBesar: selectedGroup.besar,
+      tanggal, hari: dayName(tanggal), mode, aktivitas: hadir ? aktivitasPilih : [], hadir, metode: hadir ? metode : null,
       setoran: hadir ? rows.map(({ id, ...rest }) => rest) : [],
       keterangan: keterangan.trim(),
     };
@@ -322,7 +366,7 @@ function LaporTab({ config, roster, entries, onSubmitted }) {
       const updated = [saved, ...entries];
       const streak = hadir ? computeStreak(nama, saved) : 0;
       const badge = BADGES.slice().reverse().find((b) => streak === b.min) || null;
-      saveProfile({ nama: nama.trim(), kelompok });
+      saveProfile({ nama: nama.trim(), kelompokId: selectedGroup.id });
       setLastStreak(streak); setLastBadge(badge);
       onSubmitted(updated);
       setShowModal(true);
@@ -333,20 +377,28 @@ function LaporTab({ config, roster, entries, onSubmitted }) {
     setSaving(false);
   }
 
+  if (!groups.length) {
+    return (
+      <div className="max-w-xl mx-auto pb-24 text-center pt-10">
+        <p className="text-[#6B7D77]">Belum ada kelompok yang dibuat. Minta admin menambahkan kelompok dulu di tab Pengaturan.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-xl mx-auto pb-24">
       <ArchCard className="p-6 mb-6 text-center">
         <p className="text-xs uppercase tracking-wide text-[#B8902E] font-semibold mb-1">Jadwal pekan ini</p>
         <p className="text-lg text-[#1B3A36]" style={{ fontFamily: "'Amiri', serif" }}>
-          Kelompok {kelompok} (besar {bigGroupOf(kelompok)}) &middot;{" "}
-          {mode === "mandiri" ? "Ziyadah / Murajaah Mandiri ke Ustadzah" : "Murajaah Jama'i (5 halaman/anggota)"}
+          {(selectedGroup ? selectedGroup.nama : "-") + " (Grup " + (selectedGroup ? selectedGroup.besar : "-") + ") \u00b7 " +
+            (mode === "mandiri" ? "Ziyadah / Murajaah Mandiri ke Ustadzah" : "Murajaah Jama'i (5 halaman/anggota)")}
         </p>
-        <p className="text-sm text-[#6B7D77] mt-1">{dayName(tanggal)}, {fmtDate(tanggal)}</p>
+        <p className="text-sm text-[#6B7D77] mt-1">{dayName(tanggal) + ", " + fmtDate(tanggal)}</p>
       </ArchCard>
 
-      <Field label="Kelompok kecil">
-        <select value={kelompok} onChange={(e) => setKelompok(Number(e.target.value))} className={inputCls}>
-          {KELOMPOK.map((k) => <option key={k} value={k}>Kelompok {k} (besar {bigGroupOf(k)})</option>)}
+      <Field label="Kelompok">
+        <select value={kelompokId} onChange={(e) => setKelompokId(e.target.value)} className={inputCls}>
+          {groups.map((g) => <option key={g.id} value={g.id}>{g.nama + " (Grup " + g.besar + ")"}</option>)}
         </select>
       </Field>
 
@@ -365,11 +417,11 @@ function LaporTab({ config, roster, entries, onSubmitted }) {
       <Field label="Kehadiran">
         <div className="flex gap-3">
           <button onClick={() => setHadir(true)}
-            className={`flex-1 rounded-xl py-2.5 font-medium border transition-colors ${hadir === true ? "bg-[#12534A] text-white border-[#12534A]" : "border-[#DCD3B8] text-[#1B3A36] hover:bg-[#12534A]/5"}`}>
+            className={"flex-1 rounded-xl py-2.5 font-medium border transition-colors " + (hadir === true ? "bg-[#12534A] text-white border-[#12534A]" : "border-[#DCD3B8] text-[#1B3A36] hover:bg-[#12534A]/5")}>
             Hadir
           </button>
           <button onClick={() => setHadir(false)}
-            className={`flex-1 rounded-xl py-2.5 font-medium border transition-colors ${hadir === false ? "bg-[#A8434B] text-white border-[#A8434B]" : "border-[#DCD3B8] text-[#1B3A36] hover:bg-[#A8434B]/5"}`}>
+            className={"flex-1 rounded-xl py-2.5 font-medium border transition-colors " + (hadir === false ? "bg-[#A8434B] text-white border-[#A8434B]" : "border-[#DCD3B8] text-[#1B3A36] hover:bg-[#A8434B]/5")}>
             Tidak Hadir
           </button>
         </div>
@@ -382,7 +434,7 @@ function LaporTab({ config, roster, entries, onSubmitted }) {
               <div className="flex gap-3">
                 {jenisOptions.map((opt) => (
                   <button key={opt.value} onClick={() => toggleAktivitas(opt.value)}
-                    className={`flex-1 rounded-xl py-2 border text-sm font-medium transition-colors ${aktivitasPilih.includes(opt.value) ? "bg-[#B8902E] text-white border-[#B8902E]" : "border-[#DCD3B8] text-[#1B3A36]"}`}>
+                    className={"flex-1 rounded-xl py-2 border text-sm font-medium transition-colors " + (aktivitasPilih.includes(opt.value) ? "bg-[#B8902E] text-white border-[#B8902E]" : "border-[#DCD3B8] text-[#1B3A36]")}>
                     {opt.label}
                   </button>
                 ))}
@@ -393,11 +445,11 @@ function LaporTab({ config, roster, entries, onSubmitted }) {
           <Field label="Metode kehadiran">
             <div className="flex gap-3">
               <button onClick={() => setMetode("tatap_muka")}
-                className={`flex-1 rounded-xl py-2 border text-sm font-medium flex items-center justify-center gap-2 ${metode === "tatap_muka" ? "bg-[#1B3A36] text-white border-[#1B3A36]" : "border-[#DCD3B8]"}`}>
+                className={"flex-1 rounded-xl py-2 border text-sm font-medium flex items-center justify-center gap-2 " + (metode === "tatap_muka" ? "bg-[#1B3A36] text-white border-[#1B3A36]" : "border-[#DCD3B8]")}>
                 <UsersRound size={16} /> Tatap Muka
               </button>
               <button onClick={() => setMetode("video_call")}
-                className={`flex-1 rounded-xl py-2 border text-sm font-medium flex items-center justify-center gap-2 ${metode === "video_call" ? "bg-[#1B3A36] text-white border-[#1B3A36]" : "border-[#DCD3B8]"}`}>
+                className={"flex-1 rounded-xl py-2 border text-sm font-medium flex items-center justify-center gap-2 " + (metode === "video_call" ? "bg-[#1B3A36] text-white border-[#1B3A36]" : "border-[#DCD3B8]")}>
                 <Video size={16} /> Video Call
               </button>
             </div>
@@ -430,7 +482,7 @@ function LaporTab({ config, roster, entries, onSubmitted }) {
         <Sparkles size={18} /> {saving ? "Menyimpan..." : "Kirim Laporan"}
       </button>
 
-      {showModal && <AppreciationModal streak={lastStreak} badge={lastBadge} onClose={() => setShowModal(false)} />}
+      {showModal && <AppreciationModal hadir={!!hadir} streak={lastStreak} badge={lastBadge} onClose={() => setShowModal(false)} />}
     </div>
   );
 }
@@ -439,19 +491,50 @@ function LaporTab({ config, roster, entries, onSubmitted }) {
 /* Tab: Dashboard Laporan                                                  */
 /* ---------------------------------------------------------------------- */
 
-function csvEscape(v) { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
+function csvEscape(v) { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
 
-function DashboardTab({ entries, config, onRefresh, refreshing }) {
+function ConfirmModal({ title, desc, confirmText, requireTyped, onConfirm, onCancel }) {
+  const [typed, setTyped] = useState("");
+  const canConfirm = !requireTyped || typed.trim().toUpperCase() === requireTyped;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0B1F1C]/60 p-4">
+      <div className="bg-white max-w-sm w-full rounded-2xl p-6 border border-[#DCD3B8]">
+        <h3 className="text-lg font-semibold text-[#1B3A36] mb-2">{title}</h3>
+        <p className="text-sm text-[#3E524D] mb-4">{desc}</p>
+        {requireTyped && (
+          <input value={typed} onChange={(e) => setTyped(e.target.value)}
+            placeholder={"Ketik " + requireTyped + " untuk konfirmasi"} className={inputCls + " mb-4"} />
+        )}
+        <div className="flex gap-2">
+          <button onClick={onCancel} className="flex-1 rounded-xl border border-[#DCD3B8] py-2 text-sm font-medium">Batal</button>
+          <button disabled={!canConfirm} onClick={onConfirm}
+            className="flex-1 rounded-xl bg-[#A8434B] disabled:bg-[#D9A9AD] text-white py-2 text-sm font-semibold">Hapus</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DashboardTab({ entries, groups, config, onRefresh, refreshing, onEntriesChanged, adminUnlocked }) {
   const [dari, setDari] = useState("");
   const [sampai, setSampai] = useState("");
   const [kelFilter, setKelFilter] = useState("semua");
   const [hadirFilter, setHadirFilter] = useState("semua");
   const [cari, setCari] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [confirmBulk, setConfirmBulk] = useState(false);
+
+  const kelompokOpsi = useMemo(() => {
+    const set = new Map();
+    groups.forEach((g) => set.set(g.nama, true));
+    entries.forEach((e) => set.set(e.kelompokNama, true));
+    return Array.from(set.keys());
+  }, [groups, entries]);
 
   const filtered = useMemo(() => entries.filter((e) => {
     if (dari && e.tanggal < dari) return false;
     if (sampai && e.tanggal > sampai) return false;
-    if (kelFilter !== "semua" && String(e.kelompok) !== kelFilter) return false;
+    if (kelFilter !== "semua" && e.kelompokNama !== kelFilter) return false;
     if (hadirFilter !== "semua" && String(e.hadir) !== hadirFilter) return false;
     if (cari && !e.nama.toLowerCase().includes(cari.toLowerCase())) return false;
     return true;
@@ -474,24 +557,39 @@ function DashboardTab({ entries, config, onRefresh, refreshing }) {
       .map((x) => ({ ...x, rate: x.total ? Math.round((x.hadir / x.total) * 100) : 0 }));
   }, [filtered, config.refDate]);
 
-  const perKelompok = useMemo(() => KELOMPOK.map((k) => {
-    const es = filtered.filter((e) => e.kelompok === k);
-    const hadir = es.filter((e) => e.hadir).length;
-    return { kelompok: `K${k}`, hadir, tidak: es.length - hadir };
-  }), [filtered]);
+  const perKelompok = useMemo(() => {
+    const names = kelompokOpsi.length ? kelompokOpsi : [];
+    return names.map((nm) => {
+      const es = filtered.filter((e) => e.kelompokNama === nm);
+      const hadir = es.filter((e) => e.hadir).length;
+      return { kelompok: nm, hadir, tidak: es.length - hadir };
+    }).filter((x) => x.hadir + x.tidak > 0);
+  }, [filtered, kelompokOpsi]);
 
   function exportCsv() {
-    const header = ["Nama","Kelompok","Hari","Tanggal","Hadir","Aktivitas","Metode","Setoran","Keterangan"];
+    const header = ["Nama","Kelompok","Grup","Hari","Tanggal","Hadir","Aktivitas","Metode","Setoran","Keterangan"];
     const lines = [header.join(",")];
     filtered.forEach((e) => {
-      const setoranStr = e.setoran.map((s) => `${s.jenis}:${s.surat} ${s.ayatDari}-${s.ayatSampai}`).join(" | ");
-      lines.push([e.nama, e.kelompok, e.hari, e.tanggal, e.hadir ? "Hadir" : "Tidak Hadir",
+      const setoranStr = e.setoran.map((s) => s.jenis + ":" + s.surat + " " + s.ayatDari + "-" + s.ayatSampai).join(" | ");
+      lines.push([e.nama, e.kelompokNama, e.kelompokBesar, e.hari, e.tanggal, e.hadir ? "Hadir" : "Tidak Hadir",
         (e.aktivitas || []).join("/"), e.metode || "", setoranStr, e.keterangan || ""].map(csvEscape).join(","));
     });
     const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = "laporan-tahfidz.csv"; a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function doDeleteOne(id) {
+    const ok = await deleteEntryRow(id);
+    if (ok) onEntriesChanged(entries.filter((e) => e.id !== id));
+    setConfirmDeleteId(null);
+  }
+  async function doDeleteBulk() {
+    const ids = filtered.map((e) => e.id);
+    const ok = await deleteEntryRows(ids);
+    if (ok) onEntriesChanged(entries.filter((e) => !ids.includes(e.id)));
+    setConfirmBulk(false);
   }
 
   return (
@@ -530,7 +628,7 @@ function DashboardTab({ entries, config, onRefresh, refreshing }) {
             <label className="text-xs text-[#6B7D77]">Kelompok</label>
             <select value={kelFilter} onChange={(e) => setKelFilter(e.target.value)} className="block rounded-lg border border-[#DCD3B8] px-2 py-1.5 text-sm">
               <option value="semua">Semua</option>
-              {KELOMPOK.map((k) => <option key={k} value={k}>Kelompok {k}</option>)}
+              {kelompokOpsi.map((nm) => <option key={nm} value={nm}>{nm}</option>)}
             </select>
           </div>
           <div>
@@ -548,9 +646,14 @@ function DashboardTab({ entries, config, onRefresh, refreshing }) {
               <input value={cari} onChange={(e) => setCari(e.target.value)} className="w-full px-1.5 py-1.5 text-sm outline-none" placeholder="Nama..." />
             </div>
           </div>
-          <button onClick={exportCsv} className="ml-auto flex items-center gap-1.5 rounded-lg bg-[#1B3A36] text-white text-sm px-3 py-2 hover:bg-[#12534A]">
+          <button onClick={exportCsv} className="flex items-center gap-1.5 rounded-lg bg-[#1B3A36] text-white text-sm px-3 py-2 hover:bg-[#12534A]">
             <Download size={14} /> Ekspor CSV
           </button>
+          {adminUnlocked && filtered.length > 0 && (
+            <button onClick={() => setConfirmBulk(true)} className="flex items-center gap-1.5 rounded-lg bg-[#A8434B] text-white text-sm px-3 py-2 hover:bg-[#8E3A41]">
+              <Trash2 size={14} /> Hapus {filtered.length} data ini
+            </button>
+          )}
         </div>
       </div>
 
@@ -572,7 +675,7 @@ function DashboardTab({ entries, config, onRefresh, refreshing }) {
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={perKelompok}>
               <CartesianGrid strokeDasharray="3 3" stroke="#EFEAD9" />
-              <XAxis dataKey="kelompok" tick={{ fontSize: 10 }} />
+              <XAxis dataKey="kelompok" tick={{ fontSize: 9 }} interval={0} angle={-20} textAnchor="end" height={50} />
               <YAxis tick={{ fontSize: 10 }} />
               <Tooltip />
               <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -588,7 +691,7 @@ function DashboardTab({ entries, config, onRefresh, refreshing }) {
           <table className="w-full text-sm">
             <thead className="bg-[#F3F1E7] text-[#1B3A36]">
               <tr>
-                {["Nama","Kel.","Hari/Tanggal","Aktivitas","Hadir","Metode","Setoran","Ket."].map((h) => (
+                {["Nama","Kelompok","Hari/Tanggal","Aktivitas","Hadir","Metode","Setoran","Ket.", adminUnlocked ? "" : null].filter((h) => h !== null).map((h) => (
                   <th key={h} className="text-left px-3 py-2 font-semibold whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -597,29 +700,92 @@ function DashboardTab({ entries, config, onRefresh, refreshing }) {
               {filtered.slice(0, 200).map((e) => (
                 <tr key={e.id} className="border-t border-[#EFEAD9]">
                   <td className="px-3 py-2 whitespace-nowrap">{e.nama}</td>
-                  <td className="px-3 py-2">{e.kelompok}</td>
-                  <td className="px-3 py-2 whitespace-nowrap">{e.hari}, {fmtDate(e.tanggal)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{e.kelompokNama + " (" + e.kelompokBesar + ")"}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{e.hari + ", " + fmtDate(e.tanggal)}</td>
                   <td className="px-3 py-2">{(e.aktivitas || []).join(", ") || "-"}</td>
                   <td className="px-3 py-2">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${e.hadir ? "bg-[#12534A]/10 text-[#12534A]" : "bg-[#A8434B]/10 text-[#A8434B]"}`}>
+                    <span className={"px-2 py-0.5 rounded-full text-xs font-medium " + (e.hadir ? "bg-[#12534A]/10 text-[#12534A]" : "bg-[#A8434B]/10 text-[#A8434B]")}>
                       {e.hadir ? "Hadir" : "Tidak"}
                     </span>
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">{e.metode === "tatap_muka" ? "Tatap Muka" : e.metode === "video_call" ? "Video Call" : "-"}</td>
                   <td className="px-3 py-2 min-w-[180px]">
-                    {e.setoran.map((s, i) => <div key={i} className="text-xs">{s.surat} {s.ayatDari}-{s.ayatSampai}</div>)}
+                    {e.setoran.map((s, i) => <div key={i} className="text-xs">{s.surat + " " + s.ayatDari + "-" + s.ayatSampai}</div>)}
                   </td>
                   <td className="px-3 py-2 text-xs text-[#6B7D77]">{e.keterangan || "-"}</td>
+                  {adminUnlocked && (
+                    <td className="px-3 py-2">
+                      <button onClick={() => setConfirmDeleteId(e.id)} className="text-[#A8434B] hover:bg-[#A8434B]/10 rounded-lg p-1.5">
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={8} className="px-3 py-8 text-center text-[#6B7D77]">Belum ada laporan sesuai filter.</td></tr>
+                <tr><td colSpan={9} className="px-3 py-8 text-center text-[#6B7D77]">Belum ada laporan sesuai filter.</td></tr>
               )}
             </tbody>
           </table>
         </div>
         {filtered.length > 200 && <p className="text-xs text-[#6B7D77] p-2">Menampilkan 200 dari {filtered.length} baris. Persempit filter atau ekspor CSV untuk data lengkap.</p>}
       </div>
+
+      {confirmDeleteId && (
+        <ConfirmModal title="Hapus laporan ini?" desc="Data yang dihapus tidak bisa dikembalikan."
+          onConfirm={() => doDeleteOne(confirmDeleteId)} onCancel={() => setConfirmDeleteId(null)} />
+      )}
+      {confirmBulk && (
+        <ConfirmModal title={"Hapus " + filtered.length + " data terfilter?"}
+          desc="Ini akan menghapus semua data yang sedang tampil sesuai filter di atas, permanen dan tidak bisa dikembalikan."
+          confirmText="HAPUS" requireTyped="HAPUS"
+          onConfirm={doDeleteBulk} onCancel={() => setConfirmBulk(false)} />
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Gerbang PIN Admin                                                        */
+/* ---------------------------------------------------------------------- */
+
+function AdminGate({ onUnlock }) {
+  const [pin, setPin] = useState("");
+  const [salah, setSalah] = useState(false);
+
+  function submit(e) {
+    e.preventDefault();
+    if (pin === ADMIN_PIN) {
+      try { sessionStorage.setItem("tahfidz-admin-unlocked", "1"); } catch {}
+      onUnlock();
+    } else {
+      setSalah(true);
+      setPin("");
+    }
+  }
+
+  return (
+    <div className="max-w-sm mx-auto pt-10 pb-24">
+      <ArchCard className="p-6 text-center">
+        <div className="w-14 h-14 mx-auto rounded-full bg-[#1B3A36] flex items-center justify-center mb-3">
+          <Settings size={22} className="text-white" />
+        </div>
+        <h3 className="text-lg text-[#1B3A36] mb-1" style={{ fontFamily: "'Amiri', serif" }}>
+          Halaman Pengaturan
+        </h3>
+        <p className="text-sm text-[#6B7D77] mb-5">Masukkan PIN admin untuk melanjutkan</p>
+        <form onSubmit={submit}>
+          <input
+            type="password" inputMode="numeric" autoFocus value={pin}
+            onChange={(e) => { setPin(e.target.value); setSalah(false); }}
+            placeholder="PIN" className={inputCls + " text-center tracking-widest text-lg"}
+          />
+          {salah && <p className="text-sm text-[#A8434B] mt-2">PIN salah, coba lagi.</p>}
+          <button type="submit" className="w-full rounded-full bg-[#12534A] text-white py-2.5 font-semibold mt-4 hover:bg-[#0D3F38] transition-colors">
+            Buka
+          </button>
+        </form>
+      </ArchCard>
     </div>
   );
 }
@@ -628,32 +794,64 @@ function DashboardTab({ entries, config, onRefresh, refreshing }) {
 /* Tab: Pengaturan                                                          */
 /* ---------------------------------------------------------------------- */
 
-function PengaturanTab({ config, setConfig, roster, setRoster }) {
-  const [kelAktif, setKelAktif] = useState(1);
+function PengaturanTab({ config, setConfig, groups, setGroups }) {
+  const [kelAktif, setKelAktif] = useState(groups[0]?.id || null);
   const [namaBaru, setNamaBaru] = useState("");
+  const [groupBaruNama, setGroupBaruNama] = useState("");
+  const [groupBaruBesar, setGroupBaruBesar] = useState("A");
+  const [confirmDeleteGroup, setConfirmDeleteGroup] = useState(null);
+
+  useEffect(() => { if (!kelAktif && groups.length) setKelAktif(groups[0].id); }, [groups]);
 
   async function updateConfig(patch) {
     const next = { ...config, ...patch };
     setConfig(next); await updateConfigRow(next);
   }
+
+  async function tambahGroup() {
+    if (!groupBaruNama.trim()) return;
+    const urutan = groups.length ? Math.max(...groups.map((g) => g.urutan || 0)) + 1 : 1;
+    const g = await insertGroupRow(groupBaruNama.trim(), groupBaruBesar, urutan);
+    if (g) { setGroups([...groups, g]); setGroupBaruNama(""); setKelAktif(g.id); }
+  }
+  async function renameGroup(id, nama) {
+    setGroups(groups.map((g) => (g.id === id ? { ...g, nama } : g)));
+    await updateGroupRow(id, { nama });
+  }
+  async function ubahBesarGroup(id, besar) {
+    setGroups(groups.map((g) => (g.id === id ? { ...g, besar } : g)));
+    await updateGroupRow(id, { besar });
+  }
+  async function hapusGroup(id) {
+    await deleteGroupRow(id);
+    const sisa = groups.filter((g) => g.id !== id);
+    setGroups(sisa);
+    if (kelAktif === id) setKelAktif(sisa[0]?.id || null);
+    setConfirmDeleteGroup(null);
+  }
+
   async function addName() {
-    if (!namaBaru.trim()) return;
-    const list = [...(roster[kelAktif] || []), namaBaru.trim()];
-    setRoster({ ...roster, [kelAktif]: list });
-    await updateRosterRow(kelAktif, list);
+    if (!namaBaru.trim() || !kelAktif) return;
+    const g = groups.find((x) => x.id === kelAktif);
+    const list = [...(g.names || []), namaBaru.trim()];
+    setGroups(groups.map((x) => (x.id === kelAktif ? { ...x, names: list } : x)));
+    await updateGroupRow(kelAktif, { names: list });
     setNamaBaru("");
   }
   async function removeName(nm) {
-    const list = (roster[kelAktif] || []).filter((n) => n !== nm);
-    setRoster({ ...roster, [kelAktif]: list });
-    await updateRosterRow(kelAktif, list);
+    const g = groups.find((x) => x.id === kelAktif);
+    const list = (g.names || []).filter((n) => n !== nm);
+    setGroups(groups.map((x) => (x.id === kelAktif ? { ...x, names: list } : x)));
+    await updateGroupRow(kelAktif, { names: list });
   }
 
   const preview = [0, 1, 2, 3].map((offset) => {
     const d = toDate(config.refDate); d.setDate(d.getDate() + offset * 7);
     const dateStr = d.toISOString().slice(0, 10);
-    return { dateStr, mode1: getActivityMode(1, dateStr, config), mode2: getActivityMode(6, dateStr, config) };
+    return { dateStr, modeA: getActivityMode("A", dateStr, config), modeB: getActivityMode("B", dateStr, config) };
   });
+
+  const kelAktifObj = groups.find((g) => g.id === kelAktif) || null;
 
   return (
     <div className="pb-24 max-w-2xl mx-auto">
@@ -664,7 +862,7 @@ function PengaturanTab({ config, setConfig, roster, setRoster }) {
         </Field>
         <label className="flex items-center gap-2 mb-4 text-sm text-[#1B3A36]">
           <input type="checkbox" checked={config.invert} onChange={(e) => updateConfig({ invert: e.target.checked })} />
-          Tukar urutan (mulai dengan Kelompok Besar 2 = mandiri)
+          Tukar urutan (mulai dengan Grup B = mandiri)
         </label>
         <StarDivider />
         <p className="text-sm font-medium text-[#1B3A36] mb-2">Pratinjau 4 pekan ke depan</p>
@@ -672,38 +870,79 @@ function PengaturanTab({ config, setConfig, roster, setRoster }) {
           {preview.map((p, i) => (
             <div key={i} className="flex items-center justify-between text-sm bg-[#F3F1E7]/60 rounded-lg px-3 py-2">
               <span className="text-[#6B7D77]">{fmtDate(p.dateStr)}</span>
-              <span>Besar 1: <b className="text-[#12534A]">{p.mode1 === "mandiri" ? "Mandiri" : "Jama'i"}</b></span>
-              <span>Besar 2: <b className="text-[#B8902E]">{p.mode2 === "mandiri" ? "Mandiri" : "Jama'i"}</b></span>
+              <span>Grup A: <b className="text-[#12534A]">{p.modeA === "mandiri" ? "Mandiri" : "Jama'i"}</b></span>
+              <span>Grup B: <b className="text-[#B8902E]">{p.modeB === "mandiri" ? "Mandiri" : "Jama'i"}</b></span>
             </div>
           ))}
+        </div>
+      </ArchCard>
+
+      <ArchCard className="p-6 mb-6">
+        <h3 className="text-lg text-[#1B3A36] mb-4" style={{ fontFamily: "'Amiri', serif" }}>Kelola Kelompok</h3>
+        <div className="space-y-2 mb-4">
+          {groups.map((g) => (
+            <div key={g.id} className="flex items-center gap-2 bg-[#F3F1E7]/60 rounded-xl p-2">
+              <input value={g.nama} onChange={(e) => renameGroup(g.id, e.target.value)}
+                className="flex-1 rounded-lg border border-[#DCD3B8] px-2 py-1.5 text-sm bg-white" />
+              <select value={g.besar} onChange={(e) => ubahBesarGroup(g.id, e.target.value)}
+                className="rounded-lg border border-[#DCD3B8] px-2 py-1.5 text-sm bg-white">
+                <option value="A">Grup A</option>
+                <option value="B">Grup B</option>
+              </select>
+              <button onClick={() => setConfirmDeleteGroup(g.id)} className="text-[#A8434B] hover:bg-[#A8434B]/10 rounded-lg p-1.5">
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))}
+          {groups.length === 0 && <p className="text-sm text-[#6B7D77]">Belum ada kelompok. Tambahkan dulu di bawah ini.</p>}
+        </div>
+        <div className="flex gap-2">
+          <input value={groupBaruNama} onChange={(e) => setGroupBaruNama(e.target.value)} placeholder="Nama kelompok baru"
+            className={inputCls} onKeyDown={(e) => e.key === "Enter" && tambahGroup()} />
+          <select value={groupBaruBesar} onChange={(e) => setGroupBaruBesar(e.target.value)}
+            className="rounded-xl border border-[#DCD3B8] px-3 bg-[#FBFAF6]">
+            <option value="A">Grup A</option>
+            <option value="B">Grup B</option>
+          </select>
+          <button onClick={tambahGroup} className="rounded-xl bg-[#1B3A36] text-white px-4 hover:bg-[#12534A]"><Plus size={18} /></button>
         </div>
       </ArchCard>
 
       <ArchCard className="p-6">
         <h3 className="text-lg text-[#1B3A36] mb-4" style={{ fontFamily: "'Amiri', serif" }}>Daftar Anggota per Kelompok</h3>
         <div className="flex flex-wrap gap-2 mb-4">
-          {KELOMPOK.map((k) => (
-            <button key={k} onClick={() => setKelAktif(k)}
-              className={`px-3 py-1.5 rounded-full text-sm border ${kelAktif === k ? "bg-[#12534A] text-white border-[#12534A]" : "border-[#DCD3B8] text-[#1B3A36]"}`}>
-              K{k}
+          {groups.map((g) => (
+            <button key={g.id} onClick={() => setKelAktif(g.id)}
+              className={"px-3 py-1.5 rounded-full text-sm border " + (kelAktif === g.id ? "bg-[#12534A] text-white border-[#12534A]" : "border-[#DCD3B8] text-[#1B3A36]")}>
+              {g.nama}
             </button>
           ))}
         </div>
-        <div className="flex gap-2 mb-3">
-          <input value={namaBaru} onChange={(e) => setNamaBaru(e.target.value)} placeholder="Nama anggota baru"
-            className={inputCls} onKeyDown={(e) => e.key === "Enter" && addName()} />
-          <button onClick={addName} className="rounded-xl bg-[#1B3A36] text-white px-4 hover:bg-[#12534A]"><Plus size={18} /></button>
-        </div>
-        <ul className="divide-y divide-[#EFEAD9]">
-          {(roster[kelAktif] || []).map((n) => (
-            <li key={n} className="flex items-center justify-between py-2 text-sm text-[#1B3A36]">
-              {n}
-              <button onClick={() => removeName(n)} className="text-[#A8434B] hover:bg-[#A8434B]/10 rounded-lg p-1"><Trash2 size={14} /></button>
-            </li>
-          ))}
-          {(roster[kelAktif] || []).length === 0 && <li className="py-3 text-sm text-[#6B7D77]">Belum ada anggota di kelompok ini.</li>}
-        </ul>
+        {kelAktifObj && (
+          <>
+            <div className="flex gap-2 mb-3">
+              <input value={namaBaru} onChange={(e) => setNamaBaru(e.target.value)} placeholder="Nama anggota baru"
+                className={inputCls} onKeyDown={(e) => e.key === "Enter" && addName()} />
+              <button onClick={addName} className="rounded-xl bg-[#1B3A36] text-white px-4 hover:bg-[#12534A]"><Plus size={18} /></button>
+            </div>
+            <ul className="divide-y divide-[#EFEAD9]">
+              {(kelAktifObj.names || []).map((n) => (
+                <li key={n} className="flex items-center justify-between py-2 text-sm text-[#1B3A36]">
+                  {n}
+                  <button onClick={() => removeName(n)} className="text-[#A8434B] hover:bg-[#A8434B]/10 rounded-lg p-1"><Trash2 size={14} /></button>
+                </li>
+              ))}
+              {(kelAktifObj.names || []).length === 0 && <li className="py-3 text-sm text-[#6B7D77]">Belum ada anggota di kelompok ini.</li>}
+            </ul>
+          </>
+        )}
       </ArchCard>
+
+      {confirmDeleteGroup && (
+        <ConfirmModal title="Hapus kelompok ini?"
+          desc="Anggota di dalamnya akan ikut terhapus dari daftar. Data laporan lama tetap tersimpan dengan nama kelompok saat itu."
+          onConfirm={() => hapusGroup(confirmDeleteGroup)} onCancel={() => setConfirmDeleteGroup(null)} />
+      )}
     </div>
   );
 }
@@ -715,16 +954,21 @@ function PengaturanTab({ config, setConfig, roster, setRoster }) {
 export default function App() {
   const [tab, setTab] = useState("lapor");
   const [config, setConfig] = useState(DEFAULT_CONFIG);
-  const [roster, setRoster] = useState(DEFAULT_ROSTER);
+  const [groups, setGroups] = useState([]);
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+
+  useEffect(() => {
+    try { if (sessionStorage.getItem("tahfidz-admin-unlocked") === "1") setAdminUnlocked(true); } catch {}
+  }, []);
 
   async function loadAll() {
     try {
-      const [c, r, e] = await Promise.all([fetchConfig(), fetchRoster(), fetchEntries()]);
-      setConfig(c); setRoster(r); setEntries(e); setLoadError(false);
+      const [c, g, e] = await Promise.all([fetchConfig(), fetchGroups(), fetchEntries()]);
+      setConfig(c); setGroups(g); setEntries(e); setLoadError(false);
     } catch (err) {
       console.error(err); setLoadError(true);
     }
@@ -749,11 +993,11 @@ export default function App() {
     <div className="min-h-screen bg-[#EFF3F0]">
       <header className="bg-[#1B3A36] text-white">
         <div className="max-w-3xl mx-auto px-4 pt-6 pb-8 text-center">
-          <div className="w-10 h-10 mx-auto rounded-full bg-[#B8902E]/90 flex items-center justify-center mb-2">
-            <Moon size={18} className="text-white" />
+          <div className="w-10 h-10 mx-auto mb-2 flex items-center justify-center">
+            <AppLogo size={40} />
           </div>
           <h1 className="text-2xl" style={{ fontFamily: "'Amiri', serif" }}>Setoran Tahfidz</h1>
-          <p className="text-xs text-[#BFD6CF] mt-1">Murajaah &amp; Ziyadah &middot; 10 Kelompok</p>
+          <p className="text-xs text-[#BFD6CF] mt-1">Murajaah & Ziyadah</p>
         </div>
       </header>
 
@@ -766,12 +1010,17 @@ export default function App() {
         {loading ? (
           <p className="text-center text-[#6B7D77] py-16">Memuat data...</p>
         ) : tab === "lapor" ? (
-          <LaporTab config={config} roster={roster} entries={entries} onSubmitted={setEntries} />
+          <LaporTab config={config} groups={groups} entries={entries} onSubmitted={setEntries} />
         ) : tab === "dashboard" ? (
-          <DashboardTab entries={entries} config={config} onRefresh={handleRefresh} refreshing={refreshing} />
-        ) : (
-          <PengaturanTab config={config} setConfig={setConfig} roster={roster} setRoster={setRoster} />
-        )}
+          <DashboardTab entries={entries} groups={groups} config={config} onRefresh={handleRefresh}
+            refreshing={refreshing} onEntriesChanged={setEntries} adminUnlocked={adminUnlocked} />
+        ) : tab === "pengaturan" ? (
+          adminUnlocked ? (
+            <PengaturanTab config={config} setConfig={setConfig} groups={groups} setGroups={setGroups} />
+          ) : (
+            <AdminGate onUnlock={() => setAdminUnlocked(true)} />
+          )
+        ) : null}
       </main>
 
       <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-[#DCD3B8] shadow-[0_-2px_10px_rgba(0,0,0,0.04)]">
@@ -780,7 +1029,7 @@ export default function App() {
             const Icon = t.icon; const active = tab === t.id;
             return (
               <button key={t.id} onClick={() => setTab(t.id)}
-                className={`flex flex-col items-center gap-1 py-2.5 text-xs font-medium transition-colors ${active ? "text-[#12534A]" : "text-[#9CAFA9]"}`}>
+                className={"flex flex-col items-center gap-1 py-2.5 text-xs font-medium transition-colors " + (active ? "text-[#12534A]" : "text-[#9CAFA9]")}>
                 <Icon size={20} strokeWidth={active ? 2.4 : 2} />
                 {t.label}
               </button>
